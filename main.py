@@ -79,3 +79,27 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# python scripts/01_download_data.py --url https://github.com/i4Ds/SDOBenchmark/archive/data-full.zip --output data/raw/sdobenchmark/sdobenchmark_full.zip --extract
+
+# python scripts/02_explore_dataset.py --metadata data/raw/sdobenchmark/training/meta_data.csv --image-root data/raw/sdobenchmark --channel hmi
+
+# python scripts/03_prepare_labels.py --metadata data/raw/sdobenchmark/training/meta_data.csv --test-metadata data/raw/sdobenchmark/test/meta_data.csv --image-root data/raw/sdobenchmark --channel hmi
+
+# python scripts/03_prepare_labels.py --metadata data/raw/sdobenchmark/training/meta_data.csv --test-metadata data/raw/sdobenchmark/test/meta_data.csv --image-root data/raw/sdobenchmark --channel hmi
+
+# python scripts/04_train_resnet18.py --device auto --epochs 30 --batch-size 16 --num-workers 0
+# python scripts/05_train_efficientnet.py --device auto --epochs 30 --batch-size 16 --num-workers 0
+# python scripts/06_train_convnext.py --device auto --epochs 30 --batch-size 8 --num-workers 0
+
+
+
+
+# python scripts/07_evaluate_model.py --checkpoint outputs/checkpoints/resnet18_best.pth --model resnet18
+# python scripts/07_evaluate_model.py --checkpoint outputs/checkpoints/efficientnet_b0_best.pth --model efficientnet_b0
+# python scripts/07_evaluate_model.py --checkpoint outputs/checkpoints/convnext_tiny_best.pth --model convnext_tiny
+
+# !python scripts/04_train_resnet18.py --device auto --epochs 30 --batch-size 16 --num-workers 2
+# !python scripts/05_train_efficientnet.py --device auto --epochs 30 --batch-size 16 --num-workers 2
+# !python scripts/06_train_convnext.py --device auto --epochs 30 --batch-size 8 --num-workers 2
