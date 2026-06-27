@@ -12,6 +12,9 @@ from torchvision import transforms
 
 from . import config
 from .preprocessing import add_binary_labels, attach_image_paths
+from .utils import get_logger
+
+logger = get_logger(__name__)
 
 
 def build_transforms(image_size: int = config.IMAGE_SIZE, train: bool = False):
@@ -53,6 +56,7 @@ class SolarFlareImageDataset(Dataset):
         strict: bool = True,
         return_path: bool = False,
     ) -> None:
+        logger.info("Loading dataset from %s", csv_path if not isinstance(csv_path, pd.DataFrame) else "in-memory dataframe")
         if isinstance(csv_path, pd.DataFrame):
             frame = csv_path.copy()
         else:
@@ -82,6 +86,9 @@ class SolarFlareImageDataset(Dataset):
         self.path_col = path_col
         self.label_col = label_col
         self.return_path = return_path
+        logger.info("Dataset ready with %d rows", len(self.frame))
+        logger.info("Image path column: %s", self.path_col)
+        logger.info("Label column: %s", self.label_col)
 
     def __len__(self) -> int:
         return len(self.frame)
@@ -113,4 +120,3 @@ def make_dataloader(
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
     )
-

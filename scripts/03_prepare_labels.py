@@ -8,9 +8,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import config
 from src.preprocessing import prepare_label_csvs, prepare_official_sdobenchmark_label_csvs
+from src.utils import get_logger, setup_logging
+
+logger = get_logger(__name__)
 
 
 def main() -> None:
+    setup_logging()
     parser = argparse.ArgumentParser(description="Prepare train/val/test binary flare label CSV files.")
     parser.add_argument("--metadata", required=True, help="Path to the original metadata CSV.")
     parser.add_argument("--test-metadata", default=None, help="Optional official test metadata CSV.")
@@ -49,9 +53,9 @@ def main() -> None:
             test_size=args.test_size,
             split_col=args.split_col,
         )
-    print("Prepared label files:")
+    logger.info("Prepared label files:")
     for split_name, path in paths.items():
-        print(f"{split_name}: {path}")
+        logger.info("%s: %s", split_name, path)
 
 
 if __name__ == "__main__":

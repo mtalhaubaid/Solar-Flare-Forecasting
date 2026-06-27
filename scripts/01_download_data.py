@@ -9,14 +9,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import config
-from src.utils import ensure_dir
+from src.utils import ensure_dir, get_logger, setup_logging
+
+logger = get_logger(__name__)
 
 
 def download_file(url: str, output_path: Path) -> None:
     ensure_dir(output_path.parent)
-    print(f"Downloading {url}")
+    logger.info("Downloading %s", url)
     urllib.request.urlretrieve(url, output_path)
-    print(f"Saved to {output_path}")
+    logger.info("Saved archive to %s", output_path)
 
 
 def dataset_exists(dataset_dir: Path) -> bool:
@@ -27,6 +29,7 @@ def dataset_exists(dataset_dir: Path) -> bool:
 
 
 def main() -> None:
+    setup_logging()
     parser = argparse.ArgumentParser(description="Download dataset archives into data/raw.")
     parser.add_argument("--url", default=None, help="Dataset archive URL.")
     parser.add_argument("--output", default=str(config.SDOBENCHMARK_DIR / "sdobenchmark.zip"))
@@ -39,14 +42,14 @@ def main() -> None:
     output_path = Path(args.output)
 
     if dataset_exists(dataset_dir) and not args.force:
-        print(f"SDOBenchmark already exists at {dataset_dir}")
-        print("Skipping download. Use --force if you want to download again.")
+        logger.info("SDOBenchmark already exists at %s", dataset_dir)
+        logger.info("Skipping download. Use --force if you want to download again.")
         return
 
     if not args.url:
-        print("Project folders are ready.")
-        print("Pass --url when you have the SDOBenchmark download link, for example:")
-        print(f"python scripts/01_download_data.py --url <URL> --output {output_path} --extract")
+        logger.info("Project folders are ready.")
+        logger.info("Pass --url when you have the SDOBenchmark download link, for example:")
+        logger.info("python scripts/01_download_data.py --url <URL> --output %s --extract", output_path)
         return
 
     download_file(args.url, output_path)
@@ -55,7 +58,7 @@ def main() -> None:
             raise ValueError("--extract currently supports .zip archives only.")
         with zipfile.ZipFile(output_path, "r") as archive:
             archive.extractall(output_path.parent)
-        print(f"Extracted archive into {output_path.parent}")
+        logger.info("Extracted archive into %s", output_path.parent)
 
 
 if __name__ == "__main__":

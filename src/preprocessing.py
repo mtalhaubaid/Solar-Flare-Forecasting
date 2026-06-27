@@ -11,7 +11,9 @@ from PIL import Image
 from sklearn.model_selection import train_test_split
 
 from . import config
-from .utils import ensure_dir, save_json
+from .utils import ensure_dir, get_logger, save_json
+
+logger = get_logger(__name__)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
@@ -270,6 +272,7 @@ def prepare_official_sdobenchmark_label_csvs(
     seed: int = config.SEED,
 ) -> dict[str, Path]:
     """Prepare labels from SDOBenchmark's official training/test split."""
+    logger.info("Loading metadata from %s and %s", train_metadata_csv, test_metadata_csv)
     train_frame = read_metadata(train_metadata_csv)
     test_frame = read_metadata(test_metadata_csv)
 
@@ -282,6 +285,7 @@ def prepare_official_sdobenchmark_label_csvs(
 
     train_frame = train_frame[train_frame[config.IMAGE_PATH_COLUMN].astype(str).str.len() > 0].copy()
     test_frame = test_frame[test_frame[config.IMAGE_PATH_COLUMN].astype(str).str.len() > 0].copy()
+    logger.info("Resolved image paths for %d training rows and %d test rows", len(train_frame), len(test_frame))
 
     stratify = train_frame[label_col] if train_frame[label_col].nunique() > 1 else None
     if stratify is not None and stratify.value_counts().min() < 2:
@@ -303,6 +307,9 @@ def prepare_official_sdobenchmark_label_csvs(
     train_split.to_csv(output_paths["train"], index=False)
     val_split.to_csv(output_paths["val"], index=False)
     test_frame.to_csv(output_paths["test"], index=False)
+    logger.info("Saved train labels to %s", output_paths["train"])
+    logger.info("Saved val labels to %s", output_paths["val"])
+    logger.info("Saved test labels to %s", output_paths["test"])
     return output_paths
 
 
@@ -445,6 +452,7 @@ def explore_dataset(
     channel: str | None = "hmi",
     label_col: str = config.LABEL_COLUMN,
 ) -> dict[str, object]:
+    logger.info("Exploring dataset from %s", metadata_csv)
     frame = read_metadata(metadata_csv)
     frame = add_binary_labels(frame, peak_flux_col=peak_flux_col, label_col=label_col)
     frame = attach_image_paths(frame, image_root=image_root, image_col=image_col, channel=channel)
@@ -471,4 +479,6 @@ def explore_dataset(
         "class_distribution_plot": str(plot_path),
     }
     save_json(summary, output_dir / "dataset_exploration.json")
+    logger.info("Saved dataset exploration summary to %s", output_dir / "dataset_exploration.json")
+    logger.info("Saved class distribution plot to %s", plot_path)
     return summary

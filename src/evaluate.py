@@ -13,14 +13,20 @@ from . import config
 from .dataset import SolarFlareImageDataset, build_transforms, make_dataloader
 from .metrics import binary_classification_metrics, save_confusion_matrix
 from .models import get_model
-from .utils import ensure_dir, get_device, save_json
+from .utils import ensure_dir, get_device, get_logger, save_json, setup_logging
+
+logger = get_logger(__name__)
 
 
 def evaluate(args: argparse.Namespace) -> dict[str, float | int]:
+    setup_logging()
+    logger.info("Starting evaluation")
     device = get_device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device)
     model_name = args.model or checkpoint.get("model_name", "efficientnet_b0")
     image_size = args.image_size or checkpoint.get("image_size", config.IMAGE_SIZE)
+    logger.info("Checkpoint: %s", args.checkpoint)
+    logger.info("Test CSV: %s", args.csv)
 
     dataset = SolarFlareImageDataset(
         args.csv,
@@ -33,6 +39,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int]:
         return_path=True,
     )
     loader = make_dataloader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+    logger.info("Loaded test dataset with %d samples", len(dataset))
 
     model = get_model(model_name, pretrained=False).to(device)
     state_dict = checkpoint.get("model_state_dict", checkpoint)
@@ -66,12 +73,15 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int]:
     )
     predictions_path = result_dir / f"{model_name}_predictions.csv"
     predictions.to_csv(predictions_path, index=False)
+    logger.info("Saved predictions to %s", predictions_path)
 
     metrics_path = result_dir / f"{model_name}_metrics.json"
     save_json({key: float(value) if isinstance(value, float) else value for key, value in metrics.items()}, metrics_path)
+    logger.info("Saved metrics to %s", metrics_path)
 
     matrix_path = confusion_dir / f"{model_name}_confusion_matrix.png"
     save_confusion_matrix(y_true, y_score, matrix_path, threshold=args.threshold, title=f"{model_name} confusion matrix")
+    logger.info("Saved confusion matrix to %s", matrix_path)
 
     comparison_path = result_dir / "model_comparison.csv"
     row = {"model": model_name, **metrics}
@@ -82,10 +92,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int]:
     else:
         comparison = pd.DataFrame([row])
     comparison.to_csv(comparison_path, index=False)
-
-    print(f"Metrics saved to {metrics_path}")
-    print(f"Predictions saved to {predictions_path}")
-    print(f"Confusion matrix saved to {matrix_path}")
+    logger.info("Updated model comparison table at %s", comparison_path)
     return metrics
 
 
@@ -110,6 +117,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    setup_logging()
     args = build_arg_parser().parse_args()
     evaluate(args)
 

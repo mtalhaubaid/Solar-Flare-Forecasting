@@ -15,7 +15,9 @@ from torch import nn
 from . import config
 from .dataset import SolarFlareImageDataset, build_transforms
 from .models import get_model
-from .utils import ensure_dir, get_device
+from .utils import ensure_dir, get_device, get_logger, setup_logging
+
+logger = get_logger(__name__)
 
 
 class GradCAM:
@@ -83,10 +85,14 @@ def overlay_cam(image_path: str | Path, cam_array: np.ndarray, output_path: str 
 
 
 def generate_gradcam(args: argparse.Namespace) -> None:
+    setup_logging()
+    logger.info("Starting Grad-CAM generation")
     device = get_device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device)
     model_name = args.model or checkpoint.get("model_name", "efficientnet_b0")
     image_size = args.image_size or checkpoint.get("image_size", config.IMAGE_SIZE)
+    logger.info("Checkpoint: %s", args.checkpoint)
+    logger.info("Image CSV: %s", args.csv)
 
     model = get_model(model_name, pretrained=False).to(device)
     state_dict = checkpoint.get("model_state_dict", checkpoint)
@@ -107,6 +113,8 @@ def generate_gradcam(args: argparse.Namespace) -> None:
     output_dir = ensure_dir(args.output_dir)
     target_layer = resolve_target_layer(model, model_name)
     gradcam = GradCAM(model, target_layer)
+    logger.info("Loaded %d samples for Grad-CAM", len(dataset))
+    logger.info("Grad-CAM output directory: %s", output_dir)
 
     try:
         for index in range(min(args.limit, len(dataset))):
@@ -117,10 +125,11 @@ def generate_gradcam(args: argparse.Namespace) -> None:
             prediction = int(probability >= args.threshold)
             output_path = output_dir / f"{model_name}_{index:04d}_y{int(label.item())}_p{prediction}.png"
             overlay_cam(image_path, cam_array, output_path)
+            logger.info("Saved Grad-CAM image %s", output_path)
     finally:
         gradcam.remove_hooks()
 
-    print(f"Grad-CAM images saved to {output_dir}")
+    logger.info("Grad-CAM images saved to %s", output_dir)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -142,6 +151,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    setup_logging()
     args = build_arg_parser().parse_args()
     generate_gradcam(args)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import json
 import os
 import random
@@ -12,11 +13,23 @@ from typing import Any, Iterable
 
 import numpy as np
 
+LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+
 
 def ensure_dir(path: str | Path) -> Path:
     directory = Path(path)
     directory.mkdir(parents=True, exist_ok=True)
     return directory
+
+
+def setup_logging(level: int = logging.INFO) -> logging.Logger:
+    """Configure a simple console logger for notebook and CLI runs."""
+    logging.basicConfig(level=level, format=LOG_FORMAT, force=True)
+    return logging.getLogger("solar_flare")
+
+
+def get_logger(name: str | None = None) -> logging.Logger:
+    return logging.getLogger(name or "solar_flare")
 
 
 def set_seed(seed: int = 42) -> None:
@@ -37,10 +50,11 @@ def set_seed(seed: int = 42) -> None:
 def _torch_device_or_cpu(device_name: str):
     import torch
 
+    logger = logging.getLogger("solar_flare")
     try:
         return torch.device(device_name)
     except RuntimeError:
-        print(f"PyTorch does not recognize device '{device_name}'. Falling back to CPU.")
+        logger.warning("PyTorch does not recognize device '%s'. Falling back to CPU.", device_name)
         return torch.device("cpu")
 
 
@@ -66,55 +80,56 @@ def get_device(preference: str = "auto"):
     then Apple MPS, then CPU. Explicit unavailable devices fall back to CPU.
     """
     import torch
+    logger = logging.getLogger("solar_flare")
 
     preference = (preference or "auto").lower().strip()
 
     if preference in {"auto", "best", "accelerator"}:
         device = _best_available_device()
-        print(f"Using device: {device}")
+        logger.info("Using device: %s", device)
         return device
 
     if preference == "gpu":
         device = _best_available_device()
         if device.type == "cpu":
-            print("No GPU/accelerator backend available. Using device: cpu")
+            logger.warning("No GPU/accelerator backend available. Using device: cpu")
         else:
-            print(f"Using device: {device}")
+            logger.info("Using device: %s", device)
         return device
 
     if preference.startswith("cuda"):
         if torch.cuda.is_available():
             device = _torch_device_or_cpu(preference)
-            print(f"Using device: {device}")
+            logger.info("Using device: %s", device)
             return device
-        print("CUDA was requested but is not available. Using device: cpu")
+        logger.warning("CUDA was requested but is not available. Using device: cpu")
         return torch.device("cpu")
 
     if preference.startswith("xpu"):
         if hasattr(torch, "xpu") and torch.xpu.is_available():
             device = _torch_device_or_cpu(preference)
-            print(f"Using device: {device}")
+            logger.info("Using device: %s", device)
             return device
-        print("XPU was requested but is not available. Using device: cpu")
+        logger.warning("XPU was requested but is not available. Using device: cpu")
         return torch.device("cpu")
 
     if preference == "mps":
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             device = torch.device("mps")
-            print(f"Using device: {device}")
+            logger.info("Using device: %s", device)
             return device
-        print("MPS was requested but is not available. Using device: cpu")
+        logger.warning("MPS was requested but is not available. Using device: cpu")
         return torch.device("cpu")
 
     if preference in {"cpu", "vpu", "npu"}:
         if preference in {"vpu", "npu"}:
-            print(f"{preference.upper()} is not configured as a PyTorch backend here. Using device: cpu")
+            logger.warning("%s is not configured as a PyTorch backend here. Using device: cpu", preference.upper())
         else:
-            print("Using device: cpu")
+            logger.info("Using device: cpu")
         return torch.device("cpu")
 
     device = _torch_device_or_cpu(preference)
-    print(f"Using device: {device}")
+    logger.info("Using device: %s", device)
     return device
 
 

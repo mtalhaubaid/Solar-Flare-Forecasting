@@ -4,9 +4,11 @@ import argparse
 
 from src import config
 from src.preprocessing import explore_dataset, prepare_label_csvs
+from src.utils import setup_logging
 
 
 def main() -> None:
+    setup_logging()
     parser = argparse.ArgumentParser(description="Solar flare forecasting research pipeline.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

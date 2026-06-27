@@ -17,7 +17,9 @@ from . import config
 from .dataset import SolarFlareImageDataset, build_transforms, make_dataloader
 from .metrics import binary_classification_metrics
 from .models import FocalLoss, get_model
-from .utils import ensure_dir, get_device, save_csv_rows, set_seed
+from .utils import ensure_dir, get_device, get_logger, save_csv_rows, set_seed, setup_logging
+
+logger = get_logger(__name__)
 
 
 def compute_pos_weight(labels: pd.Series) -> torch.Tensor:
@@ -78,11 +80,16 @@ def run_epoch(
 
 
 def train(args: argparse.Namespace) -> Path:
+    setup_logging()
+    logger.info("Starting training for model=%s", args.model)
     set_seed(args.seed)
     config.ensure_project_dirs()
 
     device = get_device(args.device)
     use_amp = bool(args.amp and device.type == "cuda")
+    logger.info("Using image root: %s", args.image_root)
+    logger.info("Training CSV: %s", args.train_csv)
+    logger.info("Validation CSV: %s", args.val_csv)
 
     train_dataset = SolarFlareImageDataset(
         args.train_csv,
@@ -102,16 +109,23 @@ def train(args: argparse.Namespace) -> Path:
         label_col=args.label_col,
         channel=args.channel,
     )
+    logger.info("Loaded training dataset with %d samples", len(train_dataset))
+    logger.info("Loaded validation dataset with %d samples", len(val_dataset))
 
     train_loader = make_dataloader(train_dataset, args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = make_dataloader(val_dataset, args.batch_size, shuffle=False, num_workers=args.num_workers)
+    logger.info("Batch size: %d", args.batch_size)
+    logger.info("Number of workers: %d", args.num_workers)
 
     model = get_model(args.model, pretrained=args.pretrained).to(device)
+    logger.info("Model initialized: %s", args.model)
     if args.loss == "focal":
         criterion = FocalLoss()
+        logger.info("Using focal loss")
     else:
         pos_weight = compute_pos_weight(train_dataset.frame[args.label_col]).to(device)
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        logger.info("Using BCEWithLogitsLoss with pos_weight=%.4f", float(pos_weight.item()))
 
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = ReduceLROnPlateau(optimizer, mode="min", patience=2, factor=0.5)
@@ -126,12 +140,15 @@ def train(args: argparse.Namespace) -> Path:
     log_dir = ensure_dir(args.log_dir)
     checkpoint_path = checkpoint_dir / f"{args.model}_best.pth"
     log_path = log_dir / f"{args.model}_training_log.csv"
+    logger.info("Checkpoints will be saved to %s", checkpoint_dir)
+    logger.info("Training logs will be saved to %s", log_dir)
 
     rows: list[dict[str, float | int]] = []
     best_score = -1.0
     stale_epochs = 0
 
     for epoch in range(1, args.epochs + 1):
+        logger.info("Epoch %d/%d started", epoch, args.epochs)
         train_loss, _, _ = run_epoch(
             model,
             train_loader,
@@ -159,10 +176,15 @@ def train(args: argparse.Namespace) -> Path:
         if pd.isna(monitor):
             monitor = metrics["f1"]
 
-        print(
-            f"Epoch {epoch:03d}/{args.epochs} "
-            f"train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
-            f"f1={metrics['f1']:.4f} pr_auc={metrics['pr_auc']:.4f} tss={metrics['tss']:.4f}"
+        logger.info(
+            "Epoch %03d/%d train_loss=%.4f val_loss=%.4f f1=%.4f pr_auc=%.4f tss=%.4f",
+            epoch,
+            args.epochs,
+            train_loss,
+            val_loss,
+            metrics["f1"],
+            metrics["pr_auc"],
+            metrics["tss"],
         )
 
         if float(monitor) > best_score:
@@ -181,14 +203,15 @@ def train(args: argparse.Namespace) -> Path:
                 },
                 checkpoint_path,
             )
+            logger.info("New best checkpoint saved to %s (score=%.4f)", checkpoint_path, best_score)
         else:
             stale_epochs += 1
             if stale_epochs >= args.patience:
-                print(f"Early stopping after {epoch} epochs.")
+                logger.info("Early stopping after %d epochs.", epoch)
                 break
 
-    print(f"Best checkpoint saved to {checkpoint_path}")
-    print(f"Training log saved to {log_path}")
+    logger.info("Best checkpoint saved to %s", checkpoint_path)
+    logger.info("Training log saved to %s", log_path)
     return checkpoint_path
 
 
@@ -221,6 +244,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    setup_logging()
     args = build_arg_parser().parse_args()
     train(args)
 
