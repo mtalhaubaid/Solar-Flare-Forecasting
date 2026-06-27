@@ -33,9 +33,9 @@ outputs/*
 *.tmp
 *.bak
 
-# Large local datasets
-data/raw/*
-data/processed/*
+# Large local datasets and generated data
+data/*
+!data/.gitignore
 
 # Notebook outputs and checkpoints
 *.ipynb_checkpoints
