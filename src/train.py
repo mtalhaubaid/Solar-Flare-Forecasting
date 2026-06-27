@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from . import config
 from .dataset import SolarFlareImageDataset, build_transforms, make_dataloader
-from .metrics import binary_classification_metrics
+from .metrics import binary_classification_metrics, format_compact_binary_metrics, log_binary_metrics
 from .models import FocalLoss, get_model
 from .utils import ensure_dir, get_device, get_logger, save_csv_rows, set_seed, setup_logging
 
@@ -29,6 +29,24 @@ def compute_pos_weight(labels: pd.Series) -> torch.Tensor:
     if positives == 0:
         return torch.tensor(1.0)
     return torch.tensor(max(1.0, negatives / positives), dtype=torch.float32)
+
+
+def _label_distribution(dataset: SolarFlareImageDataset, label_col: str) -> str:
+    labels = dataset.frame[label_col].astype(int)
+    counts = labels.value_counts().sort_index()
+    total = max(1, len(labels))
+    no_flare = int(counts.get(0, 0))
+    flare = int(counts.get(1, 0))
+    return (
+        f"no_flare={no_flare} ({no_flare / total:.2%}), "
+        f"flare={flare} ({flare / total:.2%})"
+    )
+
+
+def _parameter_counts(model: nn.Module) -> tuple[int, int]:
+    total = sum(parameter.numel() for parameter in model.parameters())
+    trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
+    return total, trainable
 
 
 def run_epoch(
@@ -90,6 +108,20 @@ def train(args: argparse.Namespace) -> Path:
     logger.info("Using image root: %s", args.image_root)
     logger.info("Training CSV: %s", args.train_csv)
     logger.info("Validation CSV: %s", args.val_csv)
+    logger.info(
+        "Run settings: seed=%d epochs=%d image_size=%d batch_size=%d lr=%g weight_decay=%g "
+        "threshold=%.4f patience=%d amp_requested=%s amp_enabled=%s",
+        args.seed,
+        args.epochs,
+        args.image_size,
+        args.batch_size,
+        args.lr,
+        args.weight_decay,
+        args.threshold,
+        args.patience,
+        args.amp,
+        use_amp,
+    )
 
     train_dataset = SolarFlareImageDataset(
         args.train_csv,
@@ -111,14 +143,20 @@ def train(args: argparse.Namespace) -> Path:
     )
     logger.info("Loaded training dataset with %d samples", len(train_dataset))
     logger.info("Loaded validation dataset with %d samples", len(val_dataset))
+    logger.info("Training label distribution: %s", _label_distribution(train_dataset, args.label_col))
+    logger.info("Validation label distribution: %s", _label_distribution(val_dataset, args.label_col))
 
     train_loader = make_dataloader(train_dataset, args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = make_dataloader(val_dataset, args.batch_size, shuffle=False, num_workers=args.num_workers)
     logger.info("Batch size: %d", args.batch_size)
     logger.info("Number of workers: %d", args.num_workers)
+    logger.info("Training batches per epoch: %d", len(train_loader))
+    logger.info("Validation batches per epoch: %d", len(val_loader))
 
     model = get_model(args.model, pretrained=args.pretrained).to(device)
     logger.info("Model initialized: %s", args.model)
+    total_params, trainable_params = _parameter_counts(model)
+    logger.info("Model parameters: total=%d trainable=%d", total_params, trainable_params)
     if args.loss == "focal":
         criterion = FocalLoss()
         logger.info("Using focal loss")
@@ -145,6 +183,8 @@ def train(args: argparse.Namespace) -> Path:
 
     rows: list[dict[str, float | int]] = []
     best_score = -1.0
+    best_epoch: int | None = None
+    best_metrics: dict[str, float | int] | None = None
     stale_epochs = 0
 
     for epoch in range(1, args.epochs + 1):
@@ -177,18 +217,19 @@ def train(args: argparse.Namespace) -> Path:
             monitor = metrics["f1"]
 
         logger.info(
-            "Epoch %03d/%d train_loss=%.4f val_loss=%.4f f1=%.4f pr_auc=%.4f tss=%.4f",
+            "Epoch %03d/%d completed | train_loss=%.4f val_loss=%.4f lr=%g | %s",
             epoch,
             args.epochs,
             train_loss,
             val_loss,
-            metrics["f1"],
-            metrics["pr_auc"],
-            metrics["tss"],
+            optimizer.param_groups[0]["lr"],
+            format_compact_binary_metrics(metrics),
         )
 
         if float(monitor) > best_score:
             best_score = float(monitor)
+            best_epoch = epoch
+            best_metrics = metrics.copy()
             stale_epochs = 0
             torch.save(
                 {
@@ -206,12 +247,15 @@ def train(args: argparse.Namespace) -> Path:
             logger.info("New best checkpoint saved to %s (score=%.4f)", checkpoint_path, best_score)
         else:
             stale_epochs += 1
+            logger.info("No validation improvement for %d/%d epoch(s)", stale_epochs, args.patience)
             if stale_epochs >= args.patience:
                 logger.info("Early stopping after %d epochs.", epoch)
                 break
 
     logger.info("Best checkpoint saved to %s", checkpoint_path)
     logger.info("Training log saved to %s", log_path)
+    if best_metrics is not None and best_epoch is not None:
+        log_binary_metrics(logger, best_metrics, title=f"Best validation metrics (epoch {best_epoch:03d})")
     return checkpoint_path
 
 

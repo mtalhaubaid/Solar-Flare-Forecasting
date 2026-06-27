@@ -67,17 +67,55 @@ Train the first recommended model:
 python scripts/05_train_efficientnet.py --epochs 30 --batch-size 16
 ```
 
+Training prints detailed progress to the console, including device selection, dataset sizes, class balance, batch counts, model parameter counts, loss values, learning rate, and validation metrics for every epoch.
+
 Evaluate the checkpoint:
 
 ```bash
 python scripts/07_evaluate_model.py --checkpoint outputs/checkpoints/efficientnet_b0_best.pth
 ```
 
+Evaluation prints the full metric report to the console and also saves predictions, metrics, and the confusion matrix under `outputs/`.
+
 Generate Grad-CAM images:
 
 ```bash
 python scripts/08_generate_gradcam.py --checkpoint outputs/checkpoints/efficientnet_b0_best.pth --limit 16
 ```
+
+## Console Logging and Metrics
+
+The pipeline uses console logging for the main workflow so you can see what is happening during each run without opening output files.
+
+During training, the console shows:
+
+- Selected device and AMP status.
+- Training and validation CSV paths.
+- Seed, epoch count, image size, batch size, learning rate, weight decay, threshold, and patience.
+- Training and validation label distribution.
+- Number of batches per epoch.
+- Model name and parameter counts.
+- Per-epoch `train_loss`, `val_loss`, learning rate, and validation metrics.
+- Best validation metrics after training finishes.
+
+During evaluation, the console shows:
+
+- Checkpoint path, test CSV, model name, image size, threshold, batch size, and workers.
+- Test label distribution and evaluation batch count.
+- Prediction score summary.
+- Full evaluation metrics.
+
+The printed binary-classification metrics are:
+
+- Accuracy
+- Precision
+- Recall
+- F1 score
+- ROC-AUC
+- PR-AUC
+- TSS
+- HSS
+- True negatives, false positives, false negatives, and true positives
 
 ## CPU/GPU Device Selection
 
@@ -137,3 +175,5 @@ python scripts/03_prepare_labels.py ^
 - Metrics and predictions: `outputs/results/`
 - Confusion matrices: `outputs/confusion_matrices/`
 - Grad-CAM overlays: `outputs/gradcam_results/`
+
+Training logs are saved as CSV files, while evaluation metrics are saved as JSON files. The same key evaluation metrics are also printed directly in the console.

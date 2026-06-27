@@ -11,11 +11,29 @@ from tqdm import tqdm
 
 from . import config
 from .dataset import SolarFlareImageDataset, build_transforms, make_dataloader
-from .metrics import binary_classification_metrics, save_confusion_matrix
+from .metrics import binary_classification_metrics, log_binary_metrics, save_confusion_matrix
 from .models import get_model
 from .utils import ensure_dir, get_device, get_logger, save_json, setup_logging
 
 logger = get_logger(__name__)
+
+
+def _label_distribution(dataset: SolarFlareImageDataset, label_col: str) -> str:
+    labels = dataset.frame[label_col].astype(int)
+    counts = labels.value_counts().sort_index()
+    total = max(1, len(labels))
+    no_flare = int(counts.get(0, 0))
+    flare = int(counts.get(1, 0))
+    return (
+        f"no_flare={no_flare} ({no_flare / total:.2%}), "
+        f"flare={flare} ({flare / total:.2%})"
+    )
+
+
+def _score_summary(scores: list[float]) -> str:
+    if not scores:
+        return "no scores"
+    return f"min={min(scores):.4f} mean={sum(scores) / len(scores):.4f} max={max(scores):.4f}"
 
 
 def evaluate(args: argparse.Namespace) -> dict[str, float | int]:
@@ -27,6 +45,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int]:
     image_size = args.image_size or checkpoint.get("image_size", config.IMAGE_SIZE)
     logger.info("Checkpoint: %s", args.checkpoint)
     logger.info("Test CSV: %s", args.csv)
+    logger.info("Model: %s", model_name)
+    logger.info("Image size: %s", image_size)
+    logger.info("Evaluation threshold: %.4f", args.threshold)
+    logger.info("Batch size: %d", args.batch_size)
+    logger.info("Number of workers: %d", args.num_workers)
 
     dataset = SolarFlareImageDataset(
         args.csv,
@@ -40,11 +63,14 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int]:
     )
     loader = make_dataloader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     logger.info("Loaded test dataset with %d samples", len(dataset))
+    logger.info("Test label distribution: %s", _label_distribution(dataset, args.label_col))
+    logger.info("Evaluation batches: %d", len(loader))
 
     model = get_model(model_name, pretrained=False).to(device)
     state_dict = checkpoint.get("model_state_dict", checkpoint)
     model.load_state_dict(state_dict)
     model.eval()
+    logger.info("Loaded checkpoint weights and set model to evaluation mode")
 
     y_true: list[int] = []
     y_score: list[float] = []
@@ -60,6 +86,10 @@ def evaluate(args: argparse.Namespace) -> dict[str, float | int]:
             paths.extend(batch_paths)
 
     metrics = binary_classification_metrics(y_true, y_score, threshold=args.threshold)
+    logger.info("Collected predictions for %d samples", len(y_true))
+    logger.info("Prediction score summary: %s", _score_summary(y_score))
+    log_binary_metrics(logger, metrics, title="Evaluation metrics")
+
     result_dir = ensure_dir(args.result_dir)
     confusion_dir = ensure_dir(args.confusion_dir)
 
