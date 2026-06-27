@@ -1,0 +1,17 @@
+torch
+torchvision
+torchaudio
+opencv-python
+pandas
+numpy
+numexpr>=2.14.1
+bottleneck>=1.6.0
+scikit-learn
+matplotlib
+tqdm
+albumentations
+timm
+grad-cam
+seaborn
+pillow
+pyyaml

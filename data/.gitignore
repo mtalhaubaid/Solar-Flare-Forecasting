@@ -1,0 +1,6 @@
+# Keep raw and processed data local.
+# Do not commit downloaded datasets or generated label files here.
+
+*
+!.gitignore
+
