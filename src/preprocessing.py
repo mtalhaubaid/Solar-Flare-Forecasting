@@ -11,11 +11,28 @@ from PIL import Image
 from sklearn.model_selection import train_test_split
 
 from . import config
-from .utils import ensure_dir, get_logger, save_json
+from .utils import ensure_dir, get_logger, load_json, save_json
 
 logger = get_logger(__name__)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+
+
+def label_output_paths(output_dir: str | Path = config.LABELS_DIR) -> dict[str, Path]:
+    output_dir = Path(output_dir)
+    return {
+        "train": output_dir / "train_labels.csv",
+        "val": output_dir / "val_labels.csv",
+        "test": output_dir / "test_labels.csv",
+    }
+
+
+def prepared_label_files_exist(output_dir: str | Path = config.LABELS_DIR) -> bool:
+    return all(path.exists() for path in label_output_paths(output_dir).values())
+
+
+def existing_label_files(output_dir: str | Path = config.LABELS_DIR) -> list[Path]:
+    return [path for path in label_output_paths(output_dir).values() if path.exists()]
 
 
 def convert_flux_to_label(peak_flux: float, threshold: float = config.FLARE_THRESHOLD) -> int:
@@ -270,8 +287,22 @@ def prepare_official_sdobenchmark_label_csvs(
     threshold: float = config.FLARE_THRESHOLD,
     val_size: float = 0.15,
     seed: int = config.SEED,
+    overwrite: bool = False,
 ) -> dict[str, Path]:
     """Prepare labels from SDOBenchmark's official training/test split."""
+    output_paths = label_output_paths(output_dir)
+    existing_paths = existing_label_files(output_dir)
+    if existing_paths and not overwrite:
+        if len(existing_paths) == len(output_paths):
+            logger.info("Prepared label files already exist in %s; skipping preprocessing.", output_dir)
+            logger.info("Use --force to recreate them.")
+            return output_paths
+        examples = ", ".join(str(path) for path in existing_paths)
+        raise FileExistsError(
+            "Some prepared label files already exist and will not be overwritten: "
+            f"{examples}. Use --force to recreate the full split set."
+        )
+
     logger.info("Loading metadata from %s and %s", train_metadata_csv, test_metadata_csv)
     train_frame = read_metadata(train_metadata_csv)
     test_frame = read_metadata(test_metadata_csv)
@@ -299,11 +330,7 @@ def prepare_official_sdobenchmark_label_csvs(
     )
 
     output_dir = ensure_dir(output_dir)
-    output_paths = {
-        "train": output_dir / "train_labels.csv",
-        "val": output_dir / "val_labels.csv",
-        "test": output_dir / "test_labels.csv",
-    }
+    output_paths = label_output_paths(output_dir)
     train_split.to_csv(output_paths["train"], index=False)
     val_split.to_csv(output_paths["val"], index=False)
     test_frame.to_csv(output_paths["test"], index=False)
@@ -416,7 +443,21 @@ def prepare_label_csvs(
     test_size: float = 0.15,
     seed: int = config.SEED,
     split_col: str | None = None,
+    overwrite: bool = False,
 ) -> dict[str, Path]:
+    output_paths = label_output_paths(output_dir)
+    existing_paths = existing_label_files(output_dir)
+    if existing_paths and not overwrite:
+        if len(existing_paths) == len(output_paths):
+            logger.info("Prepared label files already exist in %s; skipping preprocessing.", output_dir)
+            logger.info("Use --force to recreate them.")
+            return output_paths
+        examples = ", ".join(str(path) for path in existing_paths)
+        raise FileExistsError(
+            "Some prepared label files already exist and will not be overwritten: "
+            f"{examples}. Use --force to recreate the full split set."
+        )
+
     frame = read_metadata(metadata_csv)
     frame = add_binary_labels(frame, peak_flux_col=peak_flux_col, label_col=label_col, threshold=threshold)
     frame = attach_image_paths(frame, image_root=image_root, image_col=image_col, channel=channel)
@@ -433,11 +474,7 @@ def prepare_label_csvs(
     )
 
     output_dir = ensure_dir(output_dir)
-    output_paths = {
-        "train": output_dir / "train_labels.csv",
-        "val": output_dir / "val_labels.csv",
-        "test": output_dir / "test_labels.csv",
-    }
+    output_paths = label_output_paths(output_dir)
     for split_name, split_frame in splits.items():
         split_frame.to_csv(output_paths[split_name], index=False)
     return output_paths
@@ -451,14 +488,21 @@ def explore_dataset(
     peak_flux_col: str | None = None,
     channel: str | None = "hmi",
     label_col: str = config.LABEL_COLUMN,
+    overwrite: bool = False,
 ) -> dict[str, object]:
+    output_dir = ensure_dir(output_dir)
+    summary_path = output_dir / "dataset_exploration.json"
+    plot_path = output_dir / "class_distribution.png"
+    if summary_path.exists() and plot_path.exists() and not overwrite:
+        logger.info("Dataset exploration outputs already exist in %s; skipping exploration.", output_dir)
+        logger.info("Use --force to recreate them.")
+        return load_json(summary_path)
+
     logger.info("Exploring dataset from %s", metadata_csv)
     frame = read_metadata(metadata_csv)
     frame = add_binary_labels(frame, peak_flux_col=peak_flux_col, label_col=label_col)
     frame = attach_image_paths(frame, image_root=image_root, image_col=image_col, channel=channel)
 
-    output_dir = ensure_dir(output_dir)
-    plot_path = output_dir / "class_distribution.png"
     save_class_distribution_plot(frame, plot_path, label_col=label_col)
     image_report = check_images(frame)
 
@@ -478,7 +522,7 @@ def explore_dataset(
         },
         "class_distribution_plot": str(plot_path),
     }
-    save_json(summary, output_dir / "dataset_exploration.json")
-    logger.info("Saved dataset exploration summary to %s", output_dir / "dataset_exploration.json")
+    save_json(summary, summary_path)
+    logger.info("Saved dataset exploration summary to %s", summary_path)
     logger.info("Saved class distribution plot to %s", plot_path)
     return summary

@@ -132,6 +132,24 @@ def get_convnext_tiny(pretrained: bool = False) -> nn.Module:
     return model
 
 
+def get_swin_t(pretrained: bool = False) -> nn.Module:
+    try:
+        model = models.swin_t(weights=_torchvision_weights("Swin_T_Weights", pretrained))
+    except TypeError:
+        model = models.swin_t(pretrained=pretrained)
+    model.head = nn.Linear(model.head.in_features, 1)
+    return model
+
+
+def get_vit_b_16(pretrained: bool = False) -> nn.Module:
+    try:
+        model = models.vit_b_16(weights=_torchvision_weights("ViT_B_16_Weights", pretrained))
+    except TypeError:
+        model = models.vit_b_16(pretrained=pretrained)
+    model.heads.head = nn.Linear(model.heads.head.in_features, 1)
+    return model
+
+
 def get_model(name: str, pretrained: bool = False) -> nn.Module:
     name = name.lower()
     if name == "custom_cnn":
@@ -142,9 +160,12 @@ def get_model(name: str, pretrained: bool = False) -> nn.Module:
         return get_efficientnet_b0(pretrained=pretrained)
     if name == "convnext_tiny":
         return get_convnext_tiny(pretrained=pretrained)
+    if name == "swin_t":
+        return get_swin_t(pretrained=pretrained)
+    if name == "vit_b_16":
+        return get_vit_b_16(pretrained=pretrained)
     if name == "cnn_lstm":
         return CNNLSTM()
     if name in {"pg_mctnet", "pg-mctnet"}:
         return PGMCTNet()
     raise ValueError(f"Unknown model '{name}'. Available first-stage models: {config.MODEL_NAMES}")
-

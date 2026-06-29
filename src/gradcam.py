@@ -15,7 +15,7 @@ from torch import nn
 from . import config
 from .dataset import SolarFlareImageDataset, build_transforms
 from .models import get_model
-from .utils import ensure_dir, get_device, get_logger, setup_logging
+from .utils import build_run_name, ensure_dir, get_device, get_logger, save_json, setup_logging, timestamp
 
 logger = get_logger(__name__)
 
@@ -85,17 +85,38 @@ def overlay_cam(image_path: str | Path, cam_array: np.ndarray, output_path: str 
 
 
 def generate_gradcam(args: argparse.Namespace) -> None:
-    setup_logging()
-    logger.info("Starting Grad-CAM generation")
+    config.ensure_project_dirs()
+    created_at = args.run_timestamp or timestamp()
     device = get_device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    model_name = args.model or checkpoint.get("model_name", "efficientnet_b0")
-    image_size = args.image_size or checkpoint.get("image_size", config.IMAGE_SIZE)
+    checkpoint_dict = checkpoint if isinstance(checkpoint, dict) else {}
+    model_name = args.model or checkpoint_dict.get("model_name", "efficientnet_b0")
+    image_size = args.image_size or checkpoint_dict.get("image_size", config.IMAGE_SIZE)
+    checkpoint_epoch = checkpoint_dict.get("epoch", "unknown")
+    run_name = args.run_name or build_run_name(
+        model_name,
+        epochs=checkpoint_epoch,
+        run_type="gradcam",
+        created_at=created_at,
+        suffix=Path(args.checkpoint).stem,
+    )
+    run_dir = ensure_dir(args.run_dir or (Path(args.output_root) / run_name))
+    output_dir = ensure_dir(args.output_dir or (run_dir / "images"))
+    log_dir = ensure_dir(run_dir / "logs")
+    log_path = log_dir / f"{run_name}_gradcam.log"
+
+    setup_logging(log_file=log_path)
+    logger.info("Starting Grad-CAM generation")
+    logger.info("Grad-CAM run name: %s", run_name)
+    logger.info("Grad-CAM run directory: %s", run_dir)
+    logger.info("Using device: %s", device)
     logger.info("Checkpoint: %s", args.checkpoint)
     logger.info("Image CSV: %s", args.csv)
+    logger.info("Model: %s", model_name)
+    logger.info("Image size: %s", image_size)
 
     model = get_model(model_name, pretrained=False).to(device)
-    state_dict = checkpoint.get("model_state_dict", checkpoint)
+    state_dict = checkpoint_dict.get("model_state_dict", checkpoint)
     model.load_state_dict(state_dict)
     model.eval()
 
@@ -110,11 +131,31 @@ def generate_gradcam(args: argparse.Namespace) -> None:
         return_path=True,
     )
 
-    output_dir = ensure_dir(args.output_dir)
     target_layer = resolve_target_layer(model, model_name)
     gradcam = GradCAM(model, target_layer)
     logger.info("Loaded %d samples for Grad-CAM", len(dataset))
     logger.info("Grad-CAM output directory: %s", output_dir)
+    save_json(
+        {
+            "run_name": run_name,
+            "run_type": "gradcam",
+            "created_at": created_at,
+            "run_dir": str(run_dir),
+            "log_file": str(log_path),
+            "output_dir": str(output_dir),
+            "checkpoint": str(args.checkpoint),
+            "checkpoint_file": Path(args.checkpoint).name,
+            "checkpoint_epoch": checkpoint_epoch,
+            "training_run_name": checkpoint_dict.get("run_name"),
+            "training_run_dir": checkpoint_dict.get("run_dir"),
+            "model_name": model_name,
+            "image_size": image_size,
+            "csv": str(args.csv),
+            "limit": args.limit,
+            "threshold": args.threshold,
+        },
+        run_dir / f"{run_name}_gradcam_config.json",
+    )
 
     try:
         for index in range(min(args.limit, len(dataset))):
@@ -123,7 +164,7 @@ def generate_gradcam(args: argparse.Namespace) -> None:
             cam_array = gradcam(image)
             probability = torch.sigmoid(model(image).view(-1)).item()
             prediction = int(probability >= args.threshold)
-            output_path = output_dir / f"{model_name}_{index:04d}_y{int(label.item())}_p{prediction}.png"
+            output_path = output_dir / f"{run_name}_{index:04d}_y{int(label.item())}_p{prediction}.png"
             overlay_cam(image_path, cam_array, output_path)
             logger.info("Saved Grad-CAM image %s", output_path)
     finally:
@@ -136,7 +177,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate Grad-CAM overlays.")
     parser.add_argument("--csv", default=str(config.LABELS_DIR / "test_labels.csv"))
     parser.add_argument("--image-root", default=str(config.SDOBENCHMARK_DIR))
-    parser.add_argument("--checkpoint", default=str(config.CHECKPOINT_DIR / "efficientnet_b0_best.pth"))
+    parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--model", default=None, choices=(*config.MODEL_NAMES, None))
     parser.add_argument("--channel", default="hmi")
     parser.add_argument("--image-col", default=None)
@@ -146,12 +187,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default=config.DEVICE)
     parser.add_argument("--threshold", type=float, default=config.PREDICTION_THRESHOLD)
     parser.add_argument("--limit", type=int, default=16)
-    parser.add_argument("--output-dir", default=str(config.GRADCAM_DIR))
+    parser.add_argument("--output-root", default=str(config.GRADCAM_DIR))
+    parser.add_argument("--run-dir", default=None)
+    parser.add_argument("--run-name", default=None)
+    parser.add_argument("--run-timestamp", default=None)
+    parser.add_argument("--output-dir", default=None)
     return parser
 
 
 def main() -> None:
-    setup_logging()
     args = build_arg_parser().parse_args()
     generate_gradcam(args)
 

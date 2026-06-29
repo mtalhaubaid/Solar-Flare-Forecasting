@@ -15,7 +15,7 @@ from src import config
 from src.dataset import SolarFlareImageDataset, build_transforms, make_dataloader
 from src.metrics import binary_classification_metrics
 from src.models import get_model
-from src.utils import ensure_dir, get_device, get_logger, save_json, setup_logging
+from src.utils import build_run_name, ensure_dir, get_device, get_logger, save_json, setup_logging, timestamp
 
 logger = get_logger(__name__)
 
@@ -35,8 +35,9 @@ def _json_ready(row: pd.Series) -> dict[str, float | int]:
 def _prediction_scores(args: argparse.Namespace) -> tuple[list[int], list[float]]:
     device = get_device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    model_name = args.model or checkpoint.get("model_name", "efficientnet_b0")
-    image_size = args.image_size or checkpoint.get("image_size", config.IMAGE_SIZE)
+    checkpoint_dict = checkpoint if isinstance(checkpoint, dict) else {}
+    model_name = args.model or checkpoint_dict.get("model_name", "efficientnet_b0")
+    image_size = args.image_size or checkpoint_dict.get("image_size", config.IMAGE_SIZE)
 
     logger.info("Checkpoint: %s", args.checkpoint)
     logger.info("Threshold tuning CSV: %s", args.csv)
@@ -55,7 +56,7 @@ def _prediction_scores(args: argparse.Namespace) -> tuple[list[int], list[float]
     logger.info("Loaded threshold tuning dataset with %d samples", len(dataset))
 
     model = get_model(model_name, pretrained=False).to(device)
-    state_dict = checkpoint.get("model_state_dict", checkpoint)
+    state_dict = checkpoint_dict.get("model_state_dict", checkpoint)
     model.load_state_dict(state_dict)
     model.eval()
 
@@ -72,11 +73,29 @@ def _prediction_scores(args: argparse.Namespace) -> tuple[list[int], list[float]
 
 
 def optimize_threshold(args: argparse.Namespace) -> dict[str, float | int]:
-    setup_logging()
-    logger.info("Starting threshold optimization")
-    y_true, y_score = _prediction_scores(args)
+    config.ensure_project_dirs()
+    created_at = args.run_timestamp or timestamp()
     checkpoint = torch.load(args.checkpoint, map_location="cpu")
-    model_name = args.model or checkpoint.get("model_name", "efficientnet_b0")
+    checkpoint_dict = checkpoint if isinstance(checkpoint, dict) else {}
+    model_name = args.model or checkpoint_dict.get("model_name", "efficientnet_b0")
+    checkpoint_epoch = checkpoint_dict.get("epoch", "unknown")
+    run_name = args.run_name or build_run_name(
+        model_name,
+        epochs=checkpoint_epoch,
+        run_type="threshold",
+        created_at=created_at,
+        suffix=Path(args.checkpoint).stem,
+    )
+    run_dir = ensure_dir(args.run_dir or (Path(args.output_root) / run_name))
+    result_dir = ensure_dir(args.result_dir or (run_dir / "results"))
+    log_dir = ensure_dir(run_dir / "logs")
+    log_path = log_dir / f"{run_name}_threshold.log"
+
+    setup_logging(log_file=log_path)
+    logger.info("Starting threshold optimization")
+    logger.info("Threshold run name: %s", run_name)
+    logger.info("Threshold run directory: %s", run_dir)
+    y_true, y_score = _prediction_scores(args)
 
     thresholds = np.linspace(args.min_threshold, args.max_threshold, args.steps)
     rows = []
@@ -91,16 +110,23 @@ def optimize_threshold(args: argparse.Namespace) -> dict[str, float | int]:
             sort_columns.append(column)
     best = sweep.sort_values(sort_columns, ascending=[False] * len(sort_columns)).iloc[0]
 
-    result_dir = ensure_dir(args.result_dir)
     split_name = Path(args.csv).stem.replace("_labels", "")
-    sweep_path = result_dir / f"{model_name}_{split_name}_threshold_sweep.csv"
-    best_path = result_dir / f"{model_name}_{split_name}_best_threshold_{args.metric}.json"
+    sweep_path = result_dir / f"{run_name}_{split_name}_threshold_sweep.csv"
+    best_path = result_dir / f"{run_name}_{split_name}_best_threshold_{args.metric}.json"
 
     sweep.to_csv(sweep_path, index=False)
     best_data = _json_ready(best)
     best_data["optimized_metric"] = args.metric
     best_data["source_csv"] = str(args.csv)
     best_data["checkpoint"] = str(args.checkpoint)
+    best_data["checkpoint_file"] = Path(args.checkpoint).name
+    best_data["checkpoint_epoch"] = checkpoint_epoch
+    best_data["training_run_name"] = checkpoint_dict.get("run_name")
+    best_data["training_run_dir"] = checkpoint_dict.get("run_dir")
+    best_data["threshold_run_name"] = run_name
+    best_data["threshold_run_dir"] = str(run_dir)
+    best_data["threshold_sweep"] = str(sweep_path)
+    best_data["log_file"] = str(log_path)
     save_json(best_data, best_path)
 
     logger.info("Saved threshold sweep to %s", sweep_path)
@@ -122,7 +148,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Find a validation threshold for better TSS/HSS/F1.")
     parser.add_argument("--csv", default=str(config.LABELS_DIR / "val_labels.csv"))
     parser.add_argument("--image-root", default=str(config.SDOBENCHMARK_DIR))
-    parser.add_argument("--checkpoint", default=str(config.CHECKPOINT_DIR / "efficientnet_b0_best.pth"))
+    parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--model", default=None, choices=(*config.MODEL_NAMES, None))
     parser.add_argument("--channel", default="hmi")
     parser.add_argument("--image-col", default=None)
@@ -136,12 +162,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-threshold", type=float, default=0.0)
     parser.add_argument("--max-threshold", type=float, default=1.0)
     parser.add_argument("--steps", type=int, default=501)
-    parser.add_argument("--result-dir", default=str(config.RESULT_DIR))
+    parser.add_argument("--output-root", default=str(config.EVALUATION_DIR))
+    parser.add_argument("--run-dir", default=None)
+    parser.add_argument("--run-name", default=None)
+    parser.add_argument("--run-timestamp", default=None)
+    parser.add_argument("--result-dir", default=None)
     return parser
 
 
 def main() -> None:
-    setup_logging()
     args = build_arg_parser().parse_args()
     optimize_threshold(args)
 

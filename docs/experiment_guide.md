@@ -51,6 +51,33 @@ We do not need AIA channels, SuryaBench CSV, or external validation data yet.
 
 ## What Each Script Does
 
+### `scripts/00_run_all.py`
+
+This is the all-in-one runner.
+It runs dataset checks, exploration, label preparation, model training, threshold optimization, evaluation, and Grad-CAM from one file.
+
+Default models:
+
+- ResNet18
+- EfficientNet-B0
+- ConvNeXt-Tiny
+- Swin-T
+- ViT-B/16
+
+What it generates:
+
+- `outputs/pipeline_runs/<pipeline_run_name>/<pipeline_run_name>_summary.json`
+- timestamped experiment folders under `outputs/experiments/`
+- timestamped evaluation folders under `outputs/evaluations/`
+- timestamped Grad-CAM folders under `outputs/gradcam_results/`
+- a pipeline log under `outputs/logs/scripts/`
+
+Example:
+
+```bash
+python scripts/00_run_all.py --epochs 30 --batch-size 16 --device auto
+```
+
 ### `scripts/01_download_data.py`
 
 This script downloads the dataset archive if you still need it.
@@ -59,6 +86,9 @@ It is only for getting the raw data onto your machine.
 What it generates:
 
 - raw dataset files in `data/raw/sdobenchmark/`
+- a timestamped script log in `outputs/logs/scripts/`
+
+If the dataset or archive is already present, the script skips downloading unless `--force` is used.
 
 ### `scripts/02_explore_dataset.py`
 
@@ -69,6 +99,9 @@ What it generates:
 
 - dataset summary JSON
 - class distribution graph
+- a timestamped script log in `outputs/logs/scripts/`
+
+If the exploration outputs already exist, the script reuses them unless `--force` is used.
 
 Why it matters:
 
@@ -97,6 +130,9 @@ What it generates:
 - `data/processed/labels/train_labels.csv`
 - `data/processed/labels/val_labels.csv`
 - `data/processed/labels/test_labels.csv`
+- a timestamped script log in `outputs/logs/scripts/`
+
+If all three label CSV files already exist, preprocessing is skipped unless `--force` is used.
 
 Why it matters:
 
@@ -110,8 +146,12 @@ It is useful as a simple comparison model.
 
 What it generates:
 
-- `outputs/checkpoints/resnet18_best.pth`
-- `outputs/logs/resnet18_training_log.csv`
+- `outputs/experiments/<run_name>/checkpoints/<run_name>_best.pth`
+- `outputs/experiments/<run_name>/checkpoints/<run_name>_last.pth`
+- `outputs/experiments/<run_name>/logs/<run_name>_train.log`
+- `outputs/experiments/<run_name>/logs/<run_name>_training_log.csv`
+- `outputs/experiments/<run_name>/figures/<run_name>_training_curves.png`
+- `outputs/experiments/<run_name>/results/<run_name>_training_summary.json`
 
 ### `scripts/05_train_efficientnet.py`
 
@@ -120,8 +160,7 @@ This is the main baseline we recommend first because it is light and strong.
 
 What it generates:
 
-- `outputs/checkpoints/efficientnet_b0_best.pth`
-- `outputs/logs/efficientnet_b0_training_log.csv`
+- the same timestamped experiment folder structure as ResNet18
 
 ### `scripts/06_train_convnext.py`
 
@@ -130,51 +169,79 @@ It is a stronger modern CNN comparison model.
 
 What it generates:
 
-- `outputs/checkpoints/convnext_tiny_best.pth`
-- `outputs/logs/convnext_tiny_training_log.csv`
+- the same timestamped experiment folder structure as ResNet18
 
-### `scripts/07_evaluate_model.py`
+### `scripts/07_train_swin_transformer.py`
+
+This trains the Swin-T transformer baseline.
+
+What it generates:
+
+- the same timestamped experiment folder structure as ResNet18
+
+### `scripts/08_train_vit_transformer.py`
+
+This trains the ViT-B/16 transformer baseline.
+
+What it generates:
+
+- the same timestamped experiment folder structure as ResNet18
+
+### `scripts/09_optimize_threshold.py`
+
+This searches validation thresholds for metrics such as TSS, HSS, F1, precision, or recall.
+
+What it generates:
+
+- a timestamped threshold run under `outputs/evaluations/`
+- threshold sweep CSV
+- best-threshold JSON with the source checkpoint path
+
+### `scripts/10_evaluate_model.py`
 
 This script loads a trained checkpoint and evaluates it on the test set.
 It calculates the paper metrics and saves the confusion matrix.
 
 What it generates:
 
-- `outputs/results/*_metrics.json`
-- `outputs/results/*_predictions.csv`
+- `outputs/evaluations/<eval_run_name>/logs/<eval_run_name>_evaluation.log`
+- `outputs/evaluations/<eval_run_name>/results/<eval_run_name>_metrics.json`
+- `outputs/evaluations/<eval_run_name>/results/<eval_run_name>_predictions.csv`
+- `outputs/evaluations/<eval_run_name>/confusion_matrices/<eval_run_name>_confusion_matrix.png`
 - `outputs/results/model_comparison.csv`
-- `outputs/confusion_matrices/*_confusion_matrix.png`
 
 Why it matters:
 
 - this gives the final numbers for the paper
 - this is where we compare all models fairly
+- each metrics JSON records the exact checkpoint used for evaluation
 
-### `scripts/08_generate_gradcam.py`
+### `scripts/11_generate_gradcam.py`
 
 This creates Grad-CAM images.
 Grad-CAM shows which part of the solar image influenced the prediction.
 
 What it generates:
 
-- `outputs/gradcam_results/*.png`
+- `outputs/gradcam_results/<gradcam_run_name>/logs/<gradcam_run_name>_gradcam.log`
+- `outputs/gradcam_results/<gradcam_run_name>/images/*.png`
 
 Why it matters:
 
 - these images are useful in a journal paper
 - they help explain the model instead of only reporting numbers
 
-### `scripts/09_train_multichannel_model.py`
+### `scripts/12_train_multichannel_model.py`
 
 This is a placeholder for the multi-channel experiment.
 It is not a real experiment yet.
 
-### `scripts/10_train_temporal_model.py`
+### `scripts/13_train_temporal_model.py`
 
 This is a placeholder for the temporal experiment.
 It is not a real experiment yet.
 
-### `scripts/11_external_validation.py`
+### `scripts/14_external_validation.py`
 
 This is a placeholder for external validation.
 It is not a real experiment yet.
@@ -195,13 +262,22 @@ If you skip label preparation, the training scripts will not have the correct ta
 
 For the journal paper, use this order:
 
+The simplest option is:
+
+1. `scripts/00_run_all.py`
+
+If you want to run each step manually, use:
+
 1. `scripts/02_explore_dataset.py`
 2. `scripts/03_prepare_labels.py`
 3. `scripts/04_train_resnet18.py`
 4. `scripts/05_train_efficientnet.py`
 5. `scripts/06_train_convnext.py`
-6. `scripts/07_evaluate_model.py`
-7. `scripts/08_generate_gradcam.py`
+6. `scripts/07_train_swin_transformer.py`
+7. `scripts/08_train_vit_transformer.py`
+8. `scripts/09_optimize_threshold.py` if you want a tuned threshold
+9. `scripts/10_evaluate_model.py`
+10. `scripts/11_generate_gradcam.py`
 
 This gives you:
 
@@ -210,16 +286,18 @@ This gives you:
 - confusion matrices
 - Grad-CAM figures
 - paper-ready result tables
+- timestamped folders that keep each experiment separate
 
 ## Main Outputs For The Paper
 
 The main files you will use in the paper are:
 
 - `outputs/results/model_comparison.csv`
-- `outputs/confusion_matrices/*.png`
-- `outputs/gradcam_results/*.png`
-- `outputs/logs/*.csv`
-- `outputs/checkpoints/*.pth`
+- `outputs/evaluations/<eval_run_name>/confusion_matrices/*.png`
+- `outputs/gradcam_results/<gradcam_run_name>/images/*.png`
+- `outputs/experiments/<run_name>/logs/*.csv`
+- `outputs/experiments/<run_name>/checkpoints/*.pth`
+- `outputs/experiments/<run_name>/figures/*_training_curves.png`
 
 ## Easy Summary
 
@@ -227,9 +305,9 @@ If you want the shortest possible answer, the compulsory path is:
 
 1. Get SDOBenchmark HMI data
 2. Run label preparation
-3. Train ResNet18, EfficientNet-B0, and ConvNeXt-Tiny
-4. Evaluate all models
-5. Save confusion matrices and Grad-CAM images
+3. Train ResNet18, EfficientNet-B0, ConvNeXt-Tiny, Swin-T, and ViT-B/16 as needed
+4. Optionally optimize the threshold
+5. Evaluate all models
+6. Save confusion matrices and Grad-CAM images
 
 That is the baseline experiment set for the first journal results.
-

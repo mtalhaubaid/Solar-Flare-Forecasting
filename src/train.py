@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 from torch import nn
@@ -17,7 +19,18 @@ from . import config
 from .dataset import SolarFlareImageDataset, build_transforms, make_dataloader
 from .metrics import binary_classification_metrics, format_compact_binary_metrics, log_binary_metrics
 from .models import FocalLoss, get_model
-from .utils import ensure_dir, get_device, get_logger, save_csv_rows, set_seed, setup_logging
+from .utils import (
+    build_run_name,
+    copy_file_if_exists,
+    ensure_dir,
+    get_device,
+    get_logger,
+    save_csv_rows,
+    save_json,
+    set_seed,
+    setup_logging,
+    timestamp,
+)
 
 logger = get_logger(__name__)
 
@@ -47,6 +60,55 @@ def _parameter_counts(model: nn.Module) -> tuple[int, int]:
     total = sum(parameter.numel() for parameter in model.parameters())
     trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
     return total, trainable
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    return value
+
+
+def _save_input_csvs(args: argparse.Namespace, data_dir: Path, run_name: str) -> dict[str, str]:
+    copied: dict[str, str] = {}
+    train_copy = copy_file_if_exists(args.train_csv, data_dir / f"{run_name}_train_labels.csv")
+    val_copy = copy_file_if_exists(args.val_csv, data_dir / f"{run_name}_val_labels.csv")
+    if train_copy is not None:
+        copied["train_csv"] = str(train_copy)
+    if val_copy is not None:
+        copied["val_csv"] = str(val_copy)
+    return copied
+
+
+def save_training_curves(rows: list[dict[str, float | int]], output_path: str | Path) -> None:
+    if not rows:
+        return
+
+    frame = pd.DataFrame(rows)
+    output_path = Path(output_path)
+    ensure_dir(output_path.parent)
+
+    fig, axes = plt.subplots(2, 1, figsize=(9, 8), sharex=True)
+    axes[0].plot(frame["epoch"], frame["train_loss"], marker="o", label="train_loss")
+    axes[0].plot(frame["epoch"], frame["val_loss"], marker="o", label="val_loss")
+    axes[0].set_ylabel("Loss")
+    axes[0].legend()
+    axes[0].grid(alpha=0.3)
+
+    for column in ("accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc", "tss", "hss"):
+        if column in frame.columns:
+            axes[1].plot(frame["epoch"], frame[column], marker="o", label=column)
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("Validation metric")
+    axes[1].legend(ncol=2, fontsize=8)
+    axes[1].grid(alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
 
 
 def run_epoch(
@@ -98,10 +160,22 @@ def run_epoch(
 
 
 def train(args: argparse.Namespace) -> Path:
-    setup_logging()
-    logger.info("Starting training for model=%s", args.model)
-    set_seed(args.seed)
     config.ensure_project_dirs()
+    created_at = args.run_timestamp or timestamp()
+    run_name = args.run_name or build_run_name(args.model, epochs=args.epochs, created_at=created_at)
+    run_dir = ensure_dir(args.run_dir or (Path(args.output_root) / run_name))
+    checkpoint_dir = ensure_dir(args.checkpoint_dir or (run_dir / "checkpoints"))
+    log_dir = ensure_dir(args.log_dir or (run_dir / "logs"))
+    result_dir = ensure_dir(run_dir / "results")
+    figure_dir = ensure_dir(run_dir / "figures")
+    data_dir = ensure_dir(run_dir / "data")
+    log_path = log_dir / f"{run_name}_train.log"
+
+    setup_logging(log_file=log_path)
+    logger.info("Starting training for model=%s", args.model)
+    logger.info("Training run name: %s", run_name)
+    logger.info("Training run directory: %s", run_dir)
+    set_seed(args.seed)
 
     device = get_device(args.device)
     use_amp = bool(args.amp and device.type == "cuda")
@@ -121,6 +195,26 @@ def train(args: argparse.Namespace) -> Path:
         args.patience,
         args.amp,
         use_amp,
+    )
+    copied_csvs = _save_input_csvs(args, data_dir, run_name)
+    if copied_csvs:
+        logger.info("Saved input CSV copies for this run: %s", copied_csvs)
+    save_json(
+        {
+            "run_name": run_name,
+            "run_type": "training",
+            "created_at": created_at,
+            "run_dir": str(run_dir),
+            "checkpoint_dir": str(checkpoint_dir),
+            "log_dir": str(log_dir),
+            "result_dir": str(result_dir),
+            "figure_dir": str(figure_dir),
+            "data_dir": str(data_dir),
+            "log_file": str(log_path),
+            "input_csv_copies": copied_csvs,
+            "args": _json_ready(vars(args)),
+        },
+        run_dir / f"{run_name}_run_config.json",
     )
 
     train_dataset = SolarFlareImageDataset(
@@ -174,12 +268,13 @@ def train(args: argparse.Namespace) -> Path:
     else:
         scaler = None
 
-    checkpoint_dir = ensure_dir(args.checkpoint_dir)
-    log_dir = ensure_dir(args.log_dir)
-    checkpoint_path = checkpoint_dir / f"{args.model}_best.pth"
-    log_path = log_dir / f"{args.model}_training_log.csv"
+    checkpoint_path = checkpoint_dir / f"{run_name}_best.pth"
+    final_checkpoint_path = checkpoint_dir / f"{run_name}_last.pth"
+    training_log_path = log_dir / f"{run_name}_training_log.csv"
+    training_curves_path = figure_dir / f"{run_name}_training_curves.png"
     logger.info("Checkpoints will be saved to %s", checkpoint_dir)
     logger.info("Training logs will be saved to %s", log_dir)
+    logger.info("Training graphs will be saved to %s", figure_dir)
 
     rows: list[dict[str, float | int]] = []
     best_score = -1.0
@@ -210,7 +305,8 @@ def train(args: argparse.Namespace) -> Path:
             "lr": optimizer.param_groups[0]["lr"],
         }
         rows.append(row)
-        save_csv_rows(rows, log_path)
+        save_csv_rows(rows, training_log_path)
+        save_training_curves(rows, training_curves_path)
 
         monitor = metrics["pr_auc"]
         if pd.isna(monitor):
@@ -241,6 +337,14 @@ def train(args: argparse.Namespace) -> Path:
                     "threshold": args.threshold,
                     "label_col": args.label_col,
                     "path_col": args.path_col,
+                    "run_name": run_name,
+                    "run_dir": str(run_dir),
+                    "created_at": created_at,
+                    "epochs_requested": args.epochs,
+                    "train_csv": str(args.train_csv),
+                    "val_csv": str(args.val_csv),
+                    "training_log": str(training_log_path),
+                    "training_curves": str(training_curves_path),
                 },
                 checkpoint_path,
             )
@@ -252,8 +356,54 @@ def train(args: argparse.Namespace) -> Path:
                 logger.info("Early stopping after %d epochs.", epoch)
                 break
 
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "model_name": args.model,
+            "epoch": int(rows[-1]["epoch"]) if rows else 0,
+            "best_epoch": best_epoch,
+            "best_score": best_score,
+            "image_size": args.image_size,
+            "threshold": args.threshold,
+            "label_col": args.label_col,
+            "path_col": args.path_col,
+            "run_name": run_name,
+            "run_dir": str(run_dir),
+            "created_at": created_at,
+            "epochs_requested": args.epochs,
+            "train_csv": str(args.train_csv),
+            "val_csv": str(args.val_csv),
+            "training_log": str(training_log_path),
+            "training_curves": str(training_curves_path),
+        },
+        final_checkpoint_path,
+    )
+
+    summary_path = result_dir / f"{run_name}_training_summary.json"
+    save_json(
+        {
+            "run_name": run_name,
+            "run_type": "training",
+            "created_at": created_at,
+            "model_name": args.model,
+            "epochs_requested": args.epochs,
+            "epochs_completed": int(rows[-1]["epoch"]) if rows else 0,
+            "best_epoch": best_epoch,
+            "best_score": best_score,
+            "best_checkpoint": str(checkpoint_path),
+            "last_checkpoint": str(final_checkpoint_path),
+            "training_log": str(training_log_path),
+            "training_curves": str(training_curves_path),
+            "best_metrics": best_metrics or {},
+            "run_dir": str(run_dir),
+        },
+        summary_path,
+    )
     logger.info("Best checkpoint saved to %s", checkpoint_path)
-    logger.info("Training log saved to %s", log_path)
+    logger.info("Last checkpoint saved to %s", final_checkpoint_path)
+    logger.info("Training log saved to %s", training_log_path)
+    logger.info("Training curves saved to %s", training_curves_path)
+    logger.info("Training summary saved to %s", summary_path)
     if best_metrics is not None and best_epoch is not None:
         log_binary_metrics(logger, best_metrics, title=f"Best validation metrics (epoch {best_epoch:03d})")
     return checkpoint_path
@@ -282,13 +432,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loss", choices=("bce", "focal"), default="bce")
     parser.add_argument("--pretrained", action="store_true")
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--checkpoint-dir", default=str(config.CHECKPOINT_DIR))
-    parser.add_argument("--log-dir", default=str(config.LOG_DIR))
+    parser.add_argument("--output-root", default=str(config.EXPERIMENT_DIR))
+    parser.add_argument("--run-dir", default=None)
+    parser.add_argument("--run-name", default=None)
+    parser.add_argument("--run-timestamp", default=None)
+    parser.add_argument("--checkpoint-dir", default=None)
+    parser.add_argument("--log-dir", default=None)
     return parser
 
 
 def main() -> None:
-    setup_logging()
     args = build_arg_parser().parse_args()
     train(args)
 

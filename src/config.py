@@ -21,6 +21,10 @@ FIGURE_DIR = OUTPUT_DIR / "figures"
 RESULT_DIR = OUTPUT_DIR / "results"
 CONFUSION_MATRIX_DIR = OUTPUT_DIR / "confusion_matrices"
 GRADCAM_DIR = OUTPUT_DIR / "gradcam_results"
+EXPERIMENT_DIR = OUTPUT_DIR / "experiments"
+EVALUATION_DIR = OUTPUT_DIR / "evaluations"
+SCRIPT_LOG_DIR = LOG_DIR / "scripts"
+PIPELINE_RUN_DIR = OUTPUT_DIR / "pipeline_runs"
 
 IMAGE_SIZE = 224
 BATCH_SIZE = 32
@@ -65,6 +69,8 @@ MODEL_NAMES = (
     "resnet18",
     "efficientnet_b0",
     "convnext_tiny",
+    "swin_t",
+    "vit_b_16",
 )
 
 
@@ -79,10 +85,14 @@ def project_dirs() -> tuple[Path, ...]:
         LABELS_DIR,
         CHECKPOINT_DIR,
         LOG_DIR,
+        SCRIPT_LOG_DIR,
         FIGURE_DIR,
         RESULT_DIR,
         CONFUSION_MATRIX_DIR,
         GRADCAM_DIR,
+        EXPERIMENT_DIR,
+        EVALUATION_DIR,
+        PIPELINE_RUN_DIR,
     )
 
 
@@ -90,4 +100,3 @@ def ensure_project_dirs() -> None:
     """Create the standard project directories."""
     for directory in project_dirs():
         directory.mkdir(parents=True, exist_ok=True)
-

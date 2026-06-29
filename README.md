@@ -10,7 +10,7 @@ The current code supports the HMI-only binary image-classification baseline:
 
 1. Read SDOBenchmark metadata.
 2. Convert `peak_flux >= 1e-5` into label `1`, otherwise `0`.
-3. Train ResNet18, EfficientNet-B0, or ConvNeXt-Tiny.
+3. Train ResNet18, EfficientNet-B0, ConvNeXt-Tiny, Swin-T, or ViT-B/16.
 4. Evaluate accuracy, precision, recall, F1, ROC-AUC, PR-AUC, TSS, HSS, and confusion matrix.
 5. Generate Grad-CAM overlays.
 
@@ -37,55 +37,121 @@ data/
 src/
 scripts/
 outputs/
-  checkpoints/
   logs/
+    scripts/
   figures/
   results/
-  confusion_matrices/
+    model_comparison.csv
+  pipeline_runs/
+    <timestamp>_run_all/
+      <timestamp>_run_all_summary.json
+  experiments/
+    <timestamp>_<model>_epochs<N>/
+      checkpoints/
+      logs/
+      figures/
+      results/
+      data/
+  evaluations/
+    <timestamp>_eval_<model>_epochs<N>_<checkpoint>/
+      logs/
+      results/
+      confusion_matrices/
   gradcam_results/
+    <timestamp>_gradcam_<model>_epochs<N>_<checkpoint>/
+      logs/
+      images/
 ```
 
 ## Usage
 
-Put SDOBenchmark files under `data/raw/sdobenchmark/`, then run exploration:
+To run the full experiment pipeline with one command:
+
+```bash
+python scripts/00_run_all.py --epochs 30 --batch-size 16 --device auto
+```
+
+By default this runs dataset checks, label preparation, training for ResNet18, EfficientNet-B0, ConvNeXt-Tiny, Swin-T, and ViT-B/16, threshold optimization, evaluation, and Grad-CAM. It skips dataset download and preprocessing outputs when they already exist.
+
+Useful full-run options:
+
+```bash
+python scripts/00_run_all.py --models efficientnet_b0 convnext_tiny --epochs 30
+python scripts/00_run_all.py --models all --skip-gradcam
+python scripts/00_run_all.py --skip-threshold --skip-gradcam --epochs 5
+```
+
+Manual run order is below if you want to run each step separately.
+
+0. Run everything from one file.
+
+```bash
+python scripts/00_run_all.py --epochs 30 --batch-size 16
+```
+
+1. Download or prepare the raw dataset.
+
+If SDOBenchmark is already present under `data/raw/sdobenchmark/`, this script skips the download. Use `--force` only when you intentionally want to download again.
+
+```bash
+python scripts/01_download_data.py --url <DATASET_URL> --output data/raw/sdobenchmark/sdobenchmark.zip --extract
+```
+
+2. Explore the dataset.
+
+Exploration outputs are reused if they already exist. Add `--force` to recreate them.
 
 ```bash
 python scripts/02_explore_dataset.py --metadata data/raw/sdobenchmark/metadata.csv
 ```
 
-If you run the downloader again after the dataset is already present, it will skip re-downloading by default.
+3. Prepare binary labels and splits.
 
-Prepare binary labels and splits:
+If `train_labels.csv`, `val_labels.csv`, and `test_labels.csv` already exist, preprocessing is skipped. Add `--force` to recreate them.
 
 ```bash
 python scripts/03_prepare_labels.py --metadata data/raw/sdobenchmark/metadata.csv --channel hmi
 ```
 
-Train the first recommended model:
+4. Train one or more models.
+
+Each training run creates a new timestamped folder under `outputs/experiments/`.
 
 ```bash
+python scripts/04_train_resnet18.py --epochs 30 --batch-size 16
 python scripts/05_train_efficientnet.py --epochs 30 --batch-size 16
+python scripts/06_train_convnext.py --epochs 30 --batch-size 8
+python scripts/07_train_swin_transformer.py --epochs 30 --batch-size 8
+python scripts/08_train_vit_transformer.py --epochs 30 --batch-size 8
 ```
 
 Training prints detailed progress to the console, including device selection, dataset sizes, class balance, batch counts, model parameter counts, loss values, learning rate, and validation metrics for every epoch.
 
-Evaluate the checkpoint:
+5. Optionally tune the decision threshold on the validation set.
 
 ```bash
-python scripts/07_evaluate_model.py --checkpoint outputs/checkpoints/efficientnet_b0_best.pth
+python scripts/09_optimize_threshold.py --checkpoint outputs/experiments/<run_name>/checkpoints/<run_name>_best.pth
 ```
 
-Evaluation prints the full metric report to the console and also saves predictions, metrics, and the confusion matrix under `outputs/`.
+6. Evaluate the checkpoint.
 
-Generate Grad-CAM images:
+Evaluation creates a timestamped folder under `outputs/evaluations/`. The saved metrics JSON records the exact checkpoint path, checkpoint file, checkpoint epoch, and training run folder.
 
 ```bash
-python scripts/08_generate_gradcam.py --checkpoint outputs/checkpoints/efficientnet_b0_best.pth --limit 16
+python scripts/10_evaluate_model.py --checkpoint outputs/experiments/<run_name>/checkpoints/<run_name>_best.pth
+```
+
+7. Generate Grad-CAM images.
+
+```bash
+python scripts/11_generate_gradcam.py --checkpoint outputs/experiments/<run_name>/checkpoints/<run_name>_best.pth --limit 16
 ```
 
 ## Console Logging and Metrics
 
 The pipeline uses console logging for the main workflow so you can see what is happening during each run without opening output files.
+
+Every standalone script saves a timestamped log file in `outputs/logs/scripts/`. Training, evaluation, threshold tuning, and Grad-CAM also save run-specific logs inside their timestamped run folders.
 
 During training, the console shows:
 
@@ -104,6 +170,8 @@ During evaluation, the console shows:
 - Test label distribution and evaluation batch count.
 - Prediction score summary.
 - Full evaluation metrics.
+
+Evaluation metrics files also include the checkpoint path and training run metadata, so you can always tell which weights produced each result.
 
 The printed binary-classification metrics are:
 
@@ -170,10 +238,22 @@ python scripts/03_prepare_labels.py ^
 
 ## Outputs
 
-- Best checkpoints: `outputs/checkpoints/`
-- Training logs: `outputs/logs/`
-- Metrics and predictions: `outputs/results/`
-- Confusion matrices: `outputs/confusion_matrices/`
-- Grad-CAM overlays: `outputs/gradcam_results/`
+Training run folders contain:
 
-Training logs are saved as CSV files, while evaluation metrics are saved as JSON files. The same key evaluation metrics are also printed directly in the console.
+- `checkpoints/<run_name>_best.pth`
+- `checkpoints/<run_name>_last.pth`
+- `logs/<run_name>_train.log`
+- `logs/<run_name>_training_log.csv`
+- `figures/<run_name>_training_curves.png`
+- `results/<run_name>_training_summary.json`
+- `data/<run_name>_train_labels.csv` and `data/<run_name>_val_labels.csv`
+
+Evaluation run folders contain:
+
+- `logs/<eval_run_name>_evaluation.log`
+- `results/<eval_run_name>_metrics.json`
+- `results/<eval_run_name>_predictions.csv`
+- `results/model_comparison.csv`
+- `confusion_matrices/<eval_run_name>_confusion_matrix.png`
+
+The global comparison table is also updated at `outputs/results/model_comparison.csv`.

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import csv
-import logging
 import json
+import logging
 import os
 import random
+import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -22,10 +24,19 @@ def ensure_dir(path: str | Path) -> Path:
     return directory
 
 
-def setup_logging(level: int = logging.INFO) -> logging.Logger:
-    """Configure a simple console logger for notebook and CLI runs."""
-    logging.basicConfig(level=level, format=LOG_FORMAT, force=True)
-    return logging.getLogger("solar_flare")
+def setup_logging(level: int = logging.INFO, log_file: str | Path | None = None) -> logging.Logger:
+    """Configure console logging and, when requested, a timestamped log file."""
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_file is not None:
+        log_path = Path(log_file)
+        ensure_dir(log_path.parent)
+        handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
+
+    logging.basicConfig(level=level, format=LOG_FORMAT, handlers=handlers, force=True)
+    logger = logging.getLogger("solar_flare")
+    if log_file is not None:
+        logger.info("Saving run log to %s", Path(log_file))
+    return logger
 
 
 def get_logger(name: str | None = None) -> logging.Logger:
@@ -159,3 +170,48 @@ def save_csv_rows(rows: Iterable[dict[str, Any]], path: str | Path) -> None:
 
 def timestamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def safe_filename_part(value: object) -> str:
+    """Return a filesystem-friendly token for run names and artifact filenames."""
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value).strip())
+    cleaned = cleaned.strip("._-")
+    return cleaned or "unknown"
+
+
+def build_run_name(
+    model_name: str,
+    epochs: int | str | None = None,
+    run_type: str | None = None,
+    created_at: str | None = None,
+    suffix: str | None = None,
+) -> str:
+    """Build a timestamped run name with model and epoch information."""
+    parts = [created_at or timestamp()]
+    if run_type:
+        parts.append(safe_filename_part(run_type))
+    parts.append(safe_filename_part(model_name))
+    if epochs is not None:
+        parts.append(f"epochs{safe_filename_part(epochs)}")
+    if suffix:
+        parts.append(safe_filename_part(suffix))
+    return "_".join(parts)
+
+
+def script_log_path(script_file: str | Path, created_at: str | None = None) -> Path:
+    """Return the default timestamped log path for a standalone script."""
+    from . import config
+
+    script_name = safe_filename_part(Path(script_file).stem)
+    return config.SCRIPT_LOG_DIR / f"{created_at or timestamp()}_{script_name}.log"
+
+
+def copy_file_if_exists(source: str | Path, destination: str | Path) -> Path | None:
+    """Copy a file into an artifact folder when it exists."""
+    source_path = Path(source)
+    if not source_path.exists() or not source_path.is_file():
+        return None
+    destination_path = Path(destination)
+    ensure_dir(destination_path.parent)
+    shutil.copy2(source_path, destination_path)
+    return destination_path
